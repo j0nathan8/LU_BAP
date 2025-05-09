@@ -27,41 +27,41 @@ library(glmnet)
 library(caret)
 library(formattable)
 
-data1 <- read_excel("Dataset2.xlsx")
+data1 <- read_excel("Dataset2.xlsx") #Here I am importing my dataset
 data <- data1[c("yturnout", "ov", "elec_fric", "elwi", "same", "prop", "reg", "reg_dl", 
-                  "vot_age", "avg_edu", "eq_edu", "lit", "frpr", "dem")]
+                  "vot_age", "avg_edu", "eq_edu", "lit", "frpr", "dem")] #Here I am creating a subset of my dataset for this model
 
 ```
 
 ```{r Dataset Split}
-set.seed(42)
-trainIndex <- createDataPartition(data$yturnout, p = 0.7, list = FALSE)
+set.seed(42) #Setting seed for reproducibility
+trainIndex <- createDataPartition(data$yturnout, p = 0.7, list = FALSE) #Cutting the data with a 70/30 split into train and test data
 trainData <- data[trainIndex, ]
 testData <- data[-trainIndex, ]
 ```
 
 
 ```{r Matrices for glmnet}
-x_train <- as.matrix(trainData[, -1])
+x_train <- as.matrix(trainData[, -1]) #Dropping the intercept
 y_train <- trainData$yturnout
-x_test <- as.matrix(testData[, -1])
+x_test <- as.matrix(testData[, -1]) #Dropping the intercept
 y_test <- testData$yturnout
-x=model.matrix(yturnout~.,data)[,-1]
-x=scale(x) 
+x=model.matrix(yturnout~.,data)[,-1] #Dropping the intercept
+x=scale(x) #Standardising my predictor matrix
 y=data$yturnout
 ```
 
 ```{r Cross-Validated Ridge}
 gsize=100
-grid=5^seq(10,-2,length=gsize)
-ridge.mod=glmnet(x_train,y_train,alpha=0,lambda=grid,standardize=FALSE)
+grid=5^seq(10,-2,length=gsize) #Creating a grid for the lambda values
+ridge.mod=glmnet(x_train,y_train,alpha=0,lambda=grid,standardize=FALSE) #running an un-validated model across all lambda values for the graph below
 cmat = coef(ridge.mod) 
 cmat = cmat[2:nrow(cmat),] #drop intercept
 rgy = range(cmat)
 cpar = log(1/grid)
 
 plot(range(cpar),rgy,type='n',xlab='log(1/lambda)',ylab='coeficients',cex.lab=1.5)
-for(i in 1:nrow(cmat)) lines(cpar,cmat[i,],col=i+1,type='l')
+for(i in 1:nrow(cmat)) lines(cpar,cmat[i,],col=i+1,type='l') #Plotting coefficients against all lambda values
 
 set.seed(42) #Setting seed for reproducibility
 cv.out = cv.glmnet(x_train,y_train,alpha=0,lambda=grid) #Performing k-fold cross validation for ridge regression using the glmnet package. X is the predictor matrix, y is the response vector, alpha = 0 means a ridge regression as opposed to 1 for lasso. 
@@ -74,27 +74,18 @@ text(-5, 300, paste('best lambda is: ', round(bestlam, 2)), col='red', cex=1.5)
 abline(v=bestcmp,col='red') #Plotting the Lambda values
 
 ##get coefficients for best lambda
-ridgepred = predict(cv.out, s = bestlam, newx = x_test)
-bestridgecoef = predict(cv.out,s=bestlam,type='coefficients',exact=TRUE)[,1]
+ridgepred = predict(cv.out, s = bestlam, newx = x_test) #Running the trained model on the test data
+bestridgecoef = predict(cv.out,s=bestlam,type='coefficients',exact=TRUE)[,1] #Storing the predicted coefficients from the trained model for later
 
 ddf = data.frame(x,y)
 lm.mod = lm(y~.,ddf)
-lm.fit = lm.mod$fitted
-
-fmat = cbind(y, lm.fit, ridgepred)
-colnames(fmat) = c('y', 'Linear', 'Ridge')
-pairs(fmat)
-
-ridge_coef_table <- data.frame(
-  Variable = colnames(data),
-  Coefficient = round(bestridgecoef, 4)
-)
+lm.fit = lm.mod$fitted #Creating a linear model to compare against my model
 ```
 
 ```{r Cross-Validated Lasso}
 gsize=100
-grid=5^seq(10,-2,length=gsize)
-lasso.mod=glmnet(x_train,y_train,alpha=1,lambda=grid,standardize=FALSE)
+grid=5^seq(10,-2,length=gsize)#Creating a grid for the lambda values
+lasso.mod=glmnet(x_train,y_train,alpha=1,lambda=grid,standardize=FALSE)#running an un-validated model across all lambda values for the graph below
 cmat = coef(lasso.mod) 
 cmat = cmat[2:nrow(cmat),] #drop intercept
 rgy = range(cmat)
@@ -113,26 +104,20 @@ bestcmp = log(1/bestlam)
 text(-5, 350, paste('best lambda is: ', round(bestlam, 2)), col='red', cex=1.5)
 abline(v=bestcmp,col='red') #Plotting the Lambda values
 
-##get coefficients for best lambda
-lassopred = predict(cvl.out, s = bestlam, newx = x_test)
-bestlassocoef = predict(cvl.out,s=bestlam,type='coefficients',exact=TRUE)[,1]
+lassopred = predict(cvl.out, s = bestlam, newx = x_test) #Running the trained model on the test data
+bestlassocoef = predict(cvl.out,s=bestlam,type='coefficients',exact=TRUE)[,1] #Storing the predicted coefficients from the trained model for later
 
 ddf = data.frame(x,y)
 lm.mod = lm(y~.,ddf)
-lm.fit = lm.mod$fitted
-
-fmat = cbind(y, lm.fit, lassopred)
-colnames(fmat) = c('y', 'Linear', 'Lasso')
-pairs(fmat)
-
-ridge_coef_table <- data.frame(
-  Variable = colnames(data),
-  Coefficient = round(bestlassocoef, 4)
-)
+lm.fit = lm.mod$fitted #Creating a linear model to compare against my model
 ```
 
 
 ```{r Output Results}
+fmat = cbind(y, lm.fit, ridgepred, lassopred)
+colnames(fmat) = c('y', 'Linear', 'Ridge', 'Lasso')
+pairs(fmat)
+
 var_names = c("Youth Voter Turnout (YVT)", "Online Voting", "Electoral Friction", "Electoral Window", "Same Day", "Proportionality",  "Registration", "Registration Deadline", "Voting Age",  "Average Education Level", "Equality of Education Access", "Literacy Rate", "Freedom of Press", "Democracy Score")
 var_desc = c('The amount of voters between 18-25 who voted (%)', "Whether or not one can vote online (Y/N)", "How much friction do people face on election day (1-4)", "Can people vote over multiple days (Y/N)", "Are elections held on the same day of the week every time (Y/N)", "How proportional the electoral system is (1-5)", "Whether one must register for an election (Y/N)",  "Amount of days before election day is the registration deadline (Days)", "Starting at what age can people vote (Years)", "Average Education Level Obtained (1-3)", "How equal is the distribution of education access (-3 - 3)",  "Amount of the population that can read (%)",   "How free are journalists to publish what they want (1-100)", "How democratic is the country (0-1)")
 desc = c("This is the intercept, an abstraction of YVT when all other variables are held at 0.", "When one can vote online, YVT decreases by 0.5%", "As electoral friction increases by 1, YVT increases by 0.3%", "When you can vote over multiple days, YVT decreases by 0.4%", "When elections are held on the same day of the week every time, YVT increases by 1.2%", "As proportionality increases by 1, YVT goes up by 0.6%", "Having to register decreases YVT by 3%",  "As the registration deadline gets further away from elections, YVT goes up by 0.005%", "As voting age increases by 1, YVT decreases by 0.9%", "As average education level increases by 1, YVT increases by 2.2%", "As education is more equally distributed, YVT increases by 0.5%",  "As literacy rates increase by 1, YVT increases by 0.05%", "As press freedom increases by 1, YVT increases by 0.07%", "As democracy score increases by 1, YVT decreases by 0.7%")
