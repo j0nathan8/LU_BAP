@@ -1,0 +1,200 @@
+---
+title: "JReed Thesis"
+author: "Jonathan Reed"
+date: "2025-04-14"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(httr)
+library(stringr)
+library(readr)
+library(progress) 
+library(dplyr)
+library(readr)
+library(sjPlot)
+library(rio)
+library(tidyverse)
+library(marginaleffects)
+library(modelsummary)
+library(parameters)
+library(broom)
+library(car)            
+library(ggResidpanel)    
+library(expss) 
+library(readxl)
+library(glmnet)
+library(caret)
+library(formattable)
+
+data1 <- read_excel("Dataset2.xlsx")
+data <- data1[c("yturnout", "ov", "elec_fric", "elwi", "same", "prop", "reg", "reg_dl", 
+                  "vot_age", "avg_edu", "eq_edu", "lit", "frpr", "dem")]
+
+```
+
+```{r Dataset Split}
+set.seed(42)
+trainIndex <- createDataPartition(data$yturnout, p = 0.7, list = FALSE)
+trainData <- data[trainIndex, ]
+testData <- data[-trainIndex, ]
+```
+
+
+```{r Matrices for glmnet}
+x_train <- as.matrix(trainData[, -1])
+y_train <- trainData$yturnout
+x_test <- as.matrix(testData[, -1])
+y_test <- testData$yturnout
+x=model.matrix(yturnout~.,data)[,-1]
+x=scale(x) 
+y=data$yturnout
+```
+
+```{r Cross-Validated Ridge}
+gsize=100
+grid=5^seq(10,-2,length=gsize)
+ridge.mod=glmnet(x_train,y_train,alpha=0,lambda=grid,standardize=FALSE)
+cmat = coef(ridge.mod) 
+cmat = cmat[2:nrow(cmat),] #drop intercept
+rgy = range(cmat)
+cpar = log(1/grid)
+
+plot(range(cpar),rgy,type='n',xlab='log(1/lambda)',ylab='coeficients',cex.lab=1.5)
+for(i in 1:nrow(cmat)) lines(cpar,cmat[i,],col=i+1,type='l')
+
+set.seed(42) #Setting seed for reproducibility
+cv.out = cv.glmnet(x_train,y_train,alpha=0,lambda=grid) #Performing k-fold cross validation for ridge regression using the glmnet package. X is the predictor matrix, y is the response vector, alpha = 0 means a ridge regression as opposed to 1 for lasso. 
+
+cmp = log(1/cv.out$lambda) #Transforming the Lambda values for plotting
+plot(cmp,cv.out$cvm,type='b',xlab='cmp = log(1/lambda)',cex.lab=1.5)
+bestlam = cv.out$lambda.min
+bestcmp = log(1/bestlam)
+text(-5, 300, paste('best lambda is: ', round(bestlam, 2)), col='red', cex=1.5)
+abline(v=bestcmp,col='red') #Plotting the Lambda values
+
+##get coefficients for best lambda
+ridgepred = predict(cv.out, s = bestlam, newx = x_test)
+bestridgecoef = predict(cv.out,s=bestlam,type='coefficients',exact=TRUE)[,1]
+
+ddf = data.frame(x,y)
+lm.mod = lm(y~.,ddf)
+lm.fit = lm.mod$fitted
+
+fmat = cbind(y, lm.fit, ridgepred)
+colnames(fmat) = c('y', 'Linear', 'Ridge')
+pairs(fmat)
+
+ridge_coef_table <- data.frame(
+  Variable = colnames(data),
+  Coefficient = round(bestridgecoef, 4)
+)
+```
+
+```{r Cross-Validated Lasso}
+gsize=100
+grid=5^seq(10,-2,length=gsize)
+lasso.mod=glmnet(x_train,y_train,alpha=1,lambda=grid,standardize=FALSE)
+cmat = coef(lasso.mod) 
+cmat = cmat[2:nrow(cmat),] #drop intercept
+rgy = range(cmat)
+cpar = log(1/grid)
+
+plot(range(cpar),rgy,type='n',xlab='log(1/lambda)',ylab='coeficients',cex.lab=1.5)
+for(i in 1:nrow(cmat)) lines(cpar,cmat[i,],col=i+1,type='l')
+
+set.seed(42) #Setting seed for reproducibility
+cvl.out = cv.glmnet(x_train,y_train,alpha=1,lambda=grid) #Performing k-fold cross validation for lasso regression using the glmnet package. X is the predictor matrix, y is the response vector, alpha = 1 means a lasso regression. 
+
+cmp = log(1/cvl.out$lambda) #Transforming the Lambda values for plotting
+plot(cmp,cvl.out$cvm,type='b',xlab='cmp = log(1/lambda)',cex.lab=1.5)
+bestlam = cvl.out$lambda.min
+bestcmp = log(1/bestlam)
+text(-5, 350, paste('best lambda is: ', round(bestlam, 2)), col='red', cex=1.5)
+abline(v=bestcmp,col='red') #Plotting the Lambda values
+
+##get coefficients for best lambda
+lassopred = predict(cvl.out, s = bestlam, newx = x_test)
+bestlassocoef = predict(cvl.out,s=bestlam,type='coefficients',exact=TRUE)[,1]
+
+ddf = data.frame(x,y)
+lm.mod = lm(y~.,ddf)
+lm.fit = lm.mod$fitted
+
+fmat = cbind(y, lm.fit, lassopred)
+colnames(fmat) = c('y', 'Linear', 'Lasso')
+pairs(fmat)
+
+ridge_coef_table <- data.frame(
+  Variable = colnames(data),
+  Coefficient = round(bestlassocoef, 4)
+)
+```
+
+
+```{r Output Results}
+var_names = c("Youth Voter Turnout (YVT)", "Online Voting", "Electoral Friction", "Electoral Window", "Same Day", "Proportionality",  "Registration", "Registration Deadline", "Voting Age",  "Average Education Level", "Equality of Education Access", "Literacy Rate", "Freedom of Press", "Democracy Score")
+var_desc = c('The amount of voters between 18-25 who voted (%)', "Whether or not one can vote online (Y/N)", "How much friction do people face on election day (1-4)", "Can people vote over multiple days (Y/N)", "Are elections held on the same day of the week every time (Y/N)", "How proportional the electoral system is (1-5)", "Whether one must register for an election (Y/N)",  "Amount of days before election day is the registration deadline (Days)", "Starting at what age can people vote (Years)", "Average Education Level Obtained (1-3)", "How equal is the distribution of education access (-3 - 3)",  "Amount of the population that can read (%)",   "How free are journalists to publish what they want (1-100)", "How democratic is the country (0-1)")
+desc = c("This is the intercept, an abstraction of YVT when all other variables are held at 0.", "When one can vote online, YVT decreases by 0.5%", "As electoral friction increases by 1, YVT increases by 0.3%", "When you can vote over multiple days, YVT decreases by 0.4%", "When elections are held on the same day of the week every time, YVT increases by 1.2%", "As proportionality increases by 1, YVT goes up by 0.6%", "Having to register decreases YVT by 3%",  "As the registration deadline gets further away from elections, YVT goes up by 0.005%", "As voting age increases by 1, YVT decreases by 0.9%", "As average education level increases by 1, YVT increases by 2.2%", "As education is more equally distributed, YVT increases by 0.5%",  "As literacy rates increase by 1, YVT increases by 0.05%", "As press freedom increases by 1, YVT increases by 0.07%", "As democracy score increases by 1, YVT decreases by 0.7%")
+plot(y_test, type = "b", col = "black", pch = 16, xlab = "Youth Turnout", ylab = "Predicted Value", main = "Comparison of Predictions")
+lines(ridgepred, col = "blue", lwd = 5)  # Ridge predictions in blue
+lines(lassopred, col = "red", lwd = 2)   # Lasso predictions in red
+legend("topright", legend = c("Actual", "Ridge", "Lasso"), col = c("black", "blue", "red"), lty = 1, lwd = 2)
+
+# Ridge RMSE
+ridge_rmse <- sqrt(mean((y_test - ridgepred)^2))
+
+# Lasso RMSE
+lasso_rmse <- sqrt(mean((y_test - lassopred)^2))
+
+# Baseline RMSE (predicting the mean of the training set)
+baseline_pred <- rep(mean(y_train), length(y_test))
+baseline_rmse <- sqrt(mean((y_test - baseline_pred)^2))
+
+# Output the RMSEs
+print(paste("Ridge Model RMSE:", round(ridge_rmse, 2)))
+print(paste("Lasso Model RMSE:", round(lasso_rmse, 2)))
+print(paste("Baseline RMSE (Mean Prediction):", round(baseline_rmse, 2)))
+
+color_by_coef <- function(coef_vector) {
+  max_val <- max(abs(coef_vector))
+  formatter("span",
+    style = x ~ {
+      sapply(x, function(value) {
+        alpha <- min(1, abs(value) / max_val)
+        if (value > 0) {
+          bg <- rgb(0, 255, 0, alpha * 255, maxColorValue = 255)
+          fg <- "darkgreen"
+        } else if (value < 0) {
+          bg <- rgb(255, 0, 0, alpha * 255, maxColorValue = 255)
+          fg <- "darkred"
+        } else {
+          bg <- "white"
+          fg <- "black"
+        }
+        paste("color:", fg, ";background-color:", bg, ";font-weight:bold;")
+      })
+    }
+  )
+}
+
+# Coefficients table (only Ridge and Lasso)
+coef_table <- data.frame(
+  Variable = var_names,
+  'Variable Description' = var_desc,
+  Ridge = round(bestridgecoef, 3),
+  Lasso = round(bestlassocoef, 3),
+  
+  'Relationship Description' = desc,
+  stringsAsFactors = FALSE
+)
+
+# Formatted output
+formattable(coef_table, list(
+  Ridge = color_by_coef(coef_table$Ridge),
+  Lasso = color_by_coef(coef_table$Lasso)
+))
+
+```
+
+
