@@ -1,0 +1,128 @@
+---
+title: "JReed Thesis"
+author: "Jonathan Reed"
+date: "2025-04-14"
+output: html_document
+---
+
+```{r Bootstrap Confidence Intervals and Plot}
+library(glmnet)
+library(selectiveInference)
+library(ggplot2)
+
+data1 <- read_excel("Dataset2.xlsx") #Here I am importing my dataset
+data <- data1[c("yturnout", "elec_fric", "elwi", "same", "prop", "reg", "reg_dl", 
+                  "vot_age", "avg_edu", "eq_edu", "lit", "dem")] #Here I am creating a subset of my dataset for this model
+var_names = c("Youth Voter Turnout (YVT)",  "Documents Required to Vote", "Electoral Window", "Same Day", "Proportionality",  "Registration", "Registration Deadline", "Voting Age",  "Average Education Level", "Equality of Education Access", "Literacy Rate",  "Democracy Score")
+set.seed(42) # For reproducibility
+
+
+x_train <- as.matrix(trainData[, -1])
+y_train <- trainData$yturnout
+x_train_scaled <- scale(x_train) 
+
+
+n_boot <- 1500
+coef_matrix_ridge <- matrix(NA, nrow = n_boot, ncol = length(bestridgecoef))
+
+for (i in 1:n_boot) {
+  boot_idx <- sample(1:nrow(trainData), replace = TRUE)
+  
+  x_boot <- x_train_scaled[boot_idx, , drop = FALSE] # subset without re-scaling
+  y_boot <- y_train[boot_idx]
+  x_boot_scaled <- scale(x_boot)
+  
+  ridge_boot <- glmnet(x_boot_scaled, y_boot, alpha = 0, lambda = bestlam, standardize = TRUE)
+  coef_matrix_ridge[i, ] <- as.vector(coef(ridge_boot))
+}
+
+#Here I am calculating 95% CI for Ridge coefficients
+ci_ridge <- apply(coef_matrix_ridge, 2, quantile, probs = c(0.025, 0.975))
+mean_ridge <- colMeans(coef_matrix_ridge)
+
+#Here I am removing the intercept for plotting
+var_names_no_intercept <- var_names[-1]
+idx_no_intercept <- seq_along(var_names_no_intercept)
+#Here I am creating a table of the ridge CI values
+df_ridge <- data.frame(
+  Variable = factor(var_names_no_intercept, levels = var_names_no_intercept),
+  Index = idx_no_intercept,
+  Lower = ci_ridge[1, -1],
+  Upper = ci_ridge[2, -1],
+  Mean = mean_ridge[-1],
+  Model = "Ridge"
+)
+
+# Here I am fitting the lasso model on scaled data with best lambda
+lasso_fit <- glmnet(x_train_scaled, y_train, alpha = 1, lambda = bestlam, standardize = FALSE)
+
+#Here I am running selective inference on the lasso fit
+sel_inf <- fixedLassoInf(x_train_scaled, y_train, coef(lasso_fit)[-1], bestlam, sigma = sd(y_train - predict(lasso_fit, x_train_scaled)))
+
+#Here I am preparing full-length vectors for all variables (14 vars)
+
+lasso_all_coefs <- as.vector(coef(lasso_fit))[-1]  # excluding the intercept
+
+#Here I am removing the coefficients Lasso has determined to be 0
+active_idx <- which(lasso_all_coefs != 0)
+
+#Here I am using selectiveinference to get confidence intervals for the non-zero lasso coefficients
+lasso_coefs_full[active_idx] <- sel_inf$coef0
+lasso_ci_lower_full[active_idx] <- sel_inf$ci[, 1]
+lasso_ci_upper_full[active_idx] <- sel_inf$ci[, 2]
+lasso_pvals_full[active_idx] <- sel_inf$pv
+
+#Here I am creating a dataframe to store the lasso CI values
+df_lasso <- data.frame(
+  Variable = factor(var_names_no_intercept, levels = var_names_no_intercept),
+  Index = seq_along(var_names_no_intercept),
+  Lower = lasso_ci_lower_full,
+  Upper = lasso_ci_upper_full,
+  Mean = lasso_coefs_full,
+  Model = "Lasso"
+)
+
+#Here I am combining it with that of the ridge model
+df_all <- rbind(df_ridge, df_lasso)
+idx <- seq_along(var_names_no_intercept)
+
+#Here I am plotting these values
+ggplot(df_all, aes(x = Index, color = Model)) +
+  geom_segment(aes(x = Index, xend = Index, y = Lower, yend = Upper), size = 1, position = position_dodge(width = 0.5)) +  
+  geom_segment(aes(x = Index - 0.1, xend = Index + 0.1, y = Lower, yend = Lower), size = 1, position = position_dodge(width = 0.5)) +  
+  geom_segment(aes(x = Index - 0.1, xend = Index + 0.1, y = Upper, yend = Upper), size = 1, position = position_dodge(width = 0.5)) + 
+  geom_point(aes(y = Mean), size = 3) +
+  scale_x_continuous(breaks = idx, labels = var_names_no_intercept) +
+  scale_color_manual(values = c("Ridge" = "grey40", "Lasso" = "black")) +
+  labs(x = "Variables",
+       y = "Coefficient Estimate",
+       color = "Model",
+       title = "Confidence Intervals for Ridge (Bootstrap) and Lasso (Selective Inference)") +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "bottom"
+  )
+#Here I am calculating the p-values for the ridge model
+ridge_pvals <- sapply(seq_along(mean_ridge), function(j) {
+  coef_samples <- coef_matrix_ridge[, j]
+  mean_coef <- mean_ridge[j]
+  prop_opposite <- mean(sign(coef_samples) != sign(mean_coef), na.rm = TRUE)
+  pval <- min(1, 2 * prop_opposite)
+  return(pval)
+})
+
+#Here I am removing the intercept from the ridge p-values and the variable names
+ridge_pvals_no_intercept <- ridge_pvals[-1]
+vars_no_intercept <- var_names[-1]
+
+#Here I am creating a table with all of the p-values
+pvals_table <- data.frame(
+  Variable = vars_no_intercept,
+  Ridge_PValue = round(ridge_pvals_no_intercept, 4),
+  Lasso_PValue = round(lasso_pvals_full, 4),
+  stringsAsFactors = FALSE
+)
+
+print(pvals_table)
+```
